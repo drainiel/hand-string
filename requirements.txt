@@ -1,0 +1,8 @@
+# Hand String — requirements
+# Tested on Python 3.9–3.11. MediaPipe 0.10+ supports Python 3.12 as well.
+# On Apple Silicon run:  pip install mediapipe  (native wheels available since 0.10.9)
+
+opencv-python>=4.8.0
+mediapipe>=0.10.9
+numpy>=1.24.0
+Pillow>=9.5.0
