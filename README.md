@@ -9,10 +9,6 @@ Real-time webcam demo. Streams flowing letters along sinusoidal bands between yo
 > Q / ESC — quit <br>
 > R — new pattern
 
-> **controls** <br>
-> Q / ESC — quit <br>
-> R — new pattern
-
 ### install
 
 ```bash
