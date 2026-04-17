@@ -14,3 +14,8 @@ Real-time webcam demo. Streams flowing letters along sinusoidal bands between yo
 ```bash
 pip install -r requirements.txt
 python hand_string.py
+```
+
+### font
+
+Uses [Peridot PE Variable](https://fonts.adobe.com/fonts/peridot-pe-variable) — install it on your system, then update `FONT_PATH` in `hand_string.py` to match your fonts directory. Falls back to the system default if not found.
