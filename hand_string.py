@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 hand_string.py — real-time flowing letter strings between matching fingertips,
-with face mesh tracking and cyberpunk CRT aesthetic.
+with face mesh tracking.
 
 Letters flow along sinusoidal paths distorted by noise, with a Purple→Pink→Red
 gradient. Inspired by p5.js flowing-poster technique.
@@ -17,6 +17,7 @@ import math
 import time
 import random
 import sys
+from PIL import Image, ImageDraw, ImageFont
 
 # ── Palette (RGB) — the ONLY three allowed colours ───────────────────────────
 PALETTE = [
@@ -45,7 +46,7 @@ WAVE_AMP_FACTOR = 0.15      # amplitude as fraction of distance
 WAVE_FREQ       = 4.0       # full sine cycles across band
 
 # Letter rendering
-LETTER_FONT_SCALE = 0.45    # cv2.putText font scale
+LETTER_FONT_SIZE = 20      # px for flowing letters
 
 # Position smoothing (exponential moving average)
 SMOOTH_ALPHA = 0.45         # 0 = max smooth, 1 = no smoothing
@@ -54,12 +55,11 @@ SMOOTH_ALPHA = 0.45         # 0 = max smooth, 1 = no smoothing
 TRAIL_SMOOTH     = 0.035    # very heavy lag for trail follower
 MIN_TRAIL_DIST   = 130.0    # minimum px between tip and trail point
 
-# CRT / cyberpunk overlay
-SCANLINE_SPACING = 3        # every N-th row gets darkened
-SCANLINE_ALPHA   = 0.88     # brightness multiplier on scanlines
-
-# Cyberpunk font — DUPLEX has a clean, technical, stencil-ish look
-CYBER_FONT = cv2.FONT_HERSHEY_DUPLEX
+# Global text styling
+FONT_PATH = "/Users/daniele/Library/Fonts/peridot-pe-variable.otf"
+HUD_FONT_SIZE = 24
+CENTER_FONT_SIZE = 48
+LABEL_FONT_SIZE = 32
 
 # MediaPipe Face Mesh — face oval contour indices
 _FACE_OVAL_INDICES = [
@@ -145,26 +145,39 @@ def _draw_face_mesh(frame: np.ndarray, face_landmarks, w: int, h: int,
             cv2.circle(frame, p, 3, color_bgr, -1, cv2.LINE_AA)
 
 
-# ── Cyberpunk visual effects ───────────────────────────────────────────────────
+# ── Text helpers ───────────────────────────────────────────────────────────────
 
-def _draw_scanlines(frame: np.ndarray) -> None:
-    """Overlay subtle CRT-style horizontal scanlines."""
-    h = frame.shape[0]
-    for y in range(0, h, SCANLINE_SPACING):
-        frame[y] = (frame[y].astype(np.float32) * SCANLINE_ALPHA).astype(np.uint8)
+_FONT_CACHE: dict[int, ImageFont.FreeTypeFont | ImageFont.ImageFont] = {}
 
+
+def _get_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+    """Load Peridot once per size, with a safe fallback."""
+    font = _FONT_CACHE.get(size)
+    if font is None:
+        try:
+            font = ImageFont.truetype(FONT_PATH, size)
+        except OSError:
+            font = ImageFont.load_default()
+        _FONT_CACHE[size] = font
+    return font
+
+
+def _bgr_to_rgb(color_bgr: tuple[int, int, int]) -> tuple[int, int, int]:
+    return (color_bgr[2], color_bgr[1], color_bgr[0])
 
 def _draw_hud_label(
-    frame: np.ndarray, text: str, center: tuple[int, int],
-    scale: float, color_bgr: tuple,
+    draw: ImageDraw.ImageDraw, text: str, center: tuple[int, int],
+    size: int, color_bgr: tuple,
 ) -> None:
     """Draw a HUD-style label like [LEFT HAND], centred on the given point."""
-    hud_text = f"[{text.upper()}]"
-    (tw, _th), _baseline = cv2.getTextSize(hud_text, CYBER_FONT, scale, 1)
+    hud_text = f"[{text.capitalize()}]"
+    font = _get_font(size)
+    box = draw.textbbox((0, 0), hud_text, font=font)
+    tw = box[2] - box[0]
+    th = box[3] - box[1]
     ox = center[0] - tw // 2
-    oy = center[1]
-    cv2.putText(frame, hud_text, (ox, oy), CYBER_FONT, scale,
-                color_bgr, 1, cv2.LINE_AA)
+    oy = center[1] - th // 2
+    draw.text((ox, oy), hud_text, font=font, fill=_bgr_to_rgb(color_bgr))
 
 
 # ── Flowing letter string (p5.js-inspired) ─────────────────────────────────────
@@ -207,7 +220,8 @@ class ElasticString:
 
     # ── Draw ──────────────────────────────────────────────────────────────────
 
-    def draw(self, frame: np.ndarray, p1_raw, p2_raw) -> np.ndarray:
+    def draw(self, draw: ImageDraw.ImageDraw,
+             frame_size: tuple[int, int], p1_raw, p2_raw) -> None:
         # Smooth endpoints
         self._sp1 = _smooth_pt(self._sp1, p1_raw, SMOOTH_ALPHA)
         self._sp2 = _smooth_pt(self._sp2, p2_raw, SMOOTH_ALPHA)
@@ -217,7 +231,7 @@ class ElasticString:
         direction = p2 - p1
         dist = np.linalg.norm(direction)
         if dist < 5:
-            return frame
+            return
 
         tang = direction / dist
         perp = np.array([-tang[1], tang[0]])
@@ -226,7 +240,7 @@ class ElasticString:
         wave_amp  = dist * WAVE_AMP_FACTOR
         wave_freq = WAVE_FREQ + dist * 0.003   # slightly more cycles when far
 
-        fh, fw = frame.shape[:2]
+        fh, fw = frame_size
 
         for ltr in self.letters:
             t = ltr["t"]
@@ -257,11 +271,10 @@ class ElasticString:
             # 3-colour gradient based on position along band
             color = _gradient_color_bgr(t)
 
-            cv2.putText(frame, ltr["char"], (fx, fy),
-                        CYBER_FONT, LETTER_FONT_SCALE, color,
-                        1, cv2.LINE_AA)
-
-        return frame
+            draw.text((fx, fy), ltr["char"],
+                      font=_get_font(LETTER_FONT_SIZE),
+                      fill=_bgr_to_rgb(color),
+                      anchor="mm")
 
     # ── Interaction ───────────────────────────────────────────────────────────
 
@@ -353,18 +366,14 @@ def _ensure_file(path: str, url: str) -> None:
 
 
 def _draw_skeleton(frame: np.ndarray, landmarks, w: int, h: int,
-                   label: str = "",
                    color_bgr: tuple = (255, 255, 255)) -> None:
-    """Draw hand skeleton in white and optionally a HUD-style label above."""
+    """Draw hand skeleton in white."""
     pts = [(int(lm.x * w), int(lm.y * h)) for lm in landmarks]
     for a, b in _HAND_CONNECTIONS:
         cv2.line(frame, pts[a], pts[b], color_bgr, 1, cv2.LINE_AA)
     for p in pts:
         cv2.circle(frame, p, 3, color_bgr, -1, cv2.LINE_AA)
 
-    if label and pts:
-        wrist = pts[0]
-        _draw_hud_label(frame, label, (wrist[0], wrist[1] - 30), 0.55, color_bgr)
 
 
 # ── Main ───────────────────────────────────────────────────────────────────────
@@ -456,6 +465,7 @@ def main() -> None:
         # ── Hand landmarks ────────────────────────────────────────────────────
         left_tips:  list[tuple[int, int] | None] = [None] * len(FINGER_TIPS)
         right_tips: list[tuple[int, int] | None] = [None] * len(FINGER_TIPS)
+        hud_labels: list[tuple[str, tuple[int, int]]] = []
 
         if USE_LEGACY:
             result = hands_mdl.process(rgb)
@@ -472,7 +482,11 @@ def main() -> None:
                             right_tips[fi] = (px, py)
                     hand_label = ("Right Hand" if label == "Left"
                                   else "Left Hand")
-                    _draw_skeleton(frame, lm.landmark, w, h, label=hand_label)
+                    _draw_skeleton(frame, lm.landmark, w, h)
+                    wrist = lm.landmark[0]
+                    hud_labels.append(
+                        (hand_label, (int(wrist.x * w), int(wrist.y * h) - 30))
+                    )
         else:
             ts_ms  = int(now * 1000)
             mp_img = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
@@ -490,9 +504,15 @@ def main() -> None:
                             right_tips[fi] = (px, py)
                     hand_label = ("Right Hand" if label == "Left"
                                   else "Left Hand")
-                    _draw_skeleton(frame, lm_list, w, h, label=hand_label)
+                    _draw_skeleton(frame, lm_list, w, h)
+                    wrist = lm_list[0]
+                    hud_labels.append(
+                        (hand_label, (int(wrist.x * w), int(wrist.y * h) - 30))
+                    )
 
         # ── Flowing letter strings (one per finger pair) ──────────────────────
+        pil_img = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+        draw = ImageDraw.Draw(pil_img)
         any_active = False
         for fi in range(len(FINGER_TIPS)):
             lt, rt = left_tips[fi], right_tips[fi]
@@ -503,38 +523,45 @@ def main() -> None:
                 sim._trail = None          # reset trail for clean re-entry
                 dist = math.dist(lt, rt)
                 sim.step(dist, dt)
-                frame = sim.draw(frame, lt, rt)
+                sim.draw(draw, (h, w), lt, rt)
                 any_active = True
             elif lt:
                 # Only left hand — trail where right was
                 trail = sim.update_and_get_trail(lt, "right")
                 dist = math.dist(lt, trail)
                 sim.step(dist, dt)
-                frame = sim.draw(frame, lt, trail)
+                sim.draw(draw, (h, w), lt, trail)
                 any_active = True
             elif rt:
                 # Only right hand — trail where left was
                 trail = sim.update_and_get_trail(rt, "left")
                 dist = math.dist(rt, trail)
                 sim.step(dist, dt)
-                frame = sim.draw(frame, trail, rt)
+                sim.draw(draw, (h, w), trail, rt)
                 any_active = True
             else:
                 # No hands — advance letters but don't draw
                 sim.step(sim.prev_dist or 100, dt)
                 sim._trail = None
 
+        for label, center in hud_labels:
+            _draw_hud_label(draw, label, center, LABEL_FONT_SIZE, hud_col)
+
         if not any_active:
-            msg = "SHOW BOTH HANDS"
-            tw  = cv2.getTextSize(msg, CYBER_FONT, 0.9, 2)[0][0]
-            cv2.putText(frame, msg, ((w - tw) // 2, h // 2),
-                        CYBER_FONT, 0.9, hud_col, 2, cv2.LINE_AA)
+            msg = "Show Both Hands"
+            font = _get_font(CENTER_FONT_SIZE)
+            box = draw.textbbox((0, 0), msg, font=font)
+            tw = box[2] - box[0]
+            th = box[3] - box[1]
+            draw.text(((w - tw) // 2, (h - th) // 2),
+                      msg, font=font, fill=_bgr_to_rgb(hud_col))
 
-        cv2.putText(frame, "HAND STRING  //  Q/ESC QUIT  //  R PATTERN",
-                    (12, 30), CYBER_FONT, 0.5, hud_col, 1, cv2.LINE_AA)
+        draw.text((12, 12),
+                  "Hand String //  Q - ESC quit  //  R pattern",
+                  font=_get_font(HUD_FONT_SIZE),
+                  fill=_bgr_to_rgb(hud_col))
 
-        # ── CRT scanline overlay (applied last) ───────────────────────────
-        _draw_scanlines(frame)
+        frame = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
 
         cv2.imshow("Hand String", frame)
         key = cv2.waitKey(1) & 0xFF
